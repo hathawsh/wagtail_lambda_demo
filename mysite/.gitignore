@@ -1,0 +1,5 @@
+db.sqlite3
+out
+*.pyc
+__pycache__
+*.egg-info
