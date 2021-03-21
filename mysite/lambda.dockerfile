@@ -1,4 +1,4 @@
-FROM amazonlinux:latest AS build-stage
+FROM amazonlinux:2.0.20210219.0 AS build-stage
 
 RUN yum upgrade -y
 RUN yum install -y gcc gcc-c++ make freetype-devel yum-utils findutils openssl-devel git zip
