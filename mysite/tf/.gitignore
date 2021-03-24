@@ -1,3 +1,4 @@
 my.auto.tfvars
+terraform.tfstate
 terraform.tfstate.*
 .terraform

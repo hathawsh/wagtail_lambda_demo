@@ -38,12 +38,49 @@ variable "django_settings_module" {
   type = string
 }
 
+variable "vpc_name" {
+  type = string
+}
 
+variable "subnet_name" {
+  type = string
+}
 
+variable "subnet_group_name" {
+  type = string
+}
 
+variable "security_group_name" {
+  type = string
+}
 
+variable "vpc_cidr_block" {
+  type = string
+}
 
+variable "subnet_cidr_block_a" {
+  type = string
+}
 
+variable "subnet_cidr_block_b" {
+  type = string
+}
+
+variable "subnet_cidr_block_c" {
+  type = string
+}
+
+variable "cluster_identifier" {
+  type = string
+}
+
+variable "rds_master_secret_name" {
+  type = string
+}
+
+variable "rds_app_secret_name" {
+  type = string
+}
 
 
 terraform {
@@ -51,6 +88,10 @@ terraform {
     aws = {
       source  = "hashicorp/aws"
       # version = "~> 3.0"
+    }
+
+    rdsdataservice = {
+      source = "awsiv/rdsdataservice"
     }
   }
 }
@@ -302,6 +343,54 @@ POLICY
 
 
 
+resource "aws_vpc" "wagtail" {
+  cidr_block = var.vpc_cidr_block
+  tags = {
+    Name = var.vpc_name
+  }
+}
+
+resource "aws_subnet" "wagtail_a" {
+  vpc_id = aws_vpc.wagtail.id
+  cidr_block = var.subnet_cidr_block_a
+  availability_zone = "${var.region}a"
+  tags = {
+    Name = "${var.subnet_name}_a"
+  }
+}
+
+resource "aws_subnet" "wagtail_b" {
+  vpc_id = aws_vpc.wagtail.id
+  cidr_block = var.subnet_cidr_block_b
+  availability_zone = "${var.region}b"
+  tags = {
+    Name = "${var.subnet_name}_b"
+  }
+}
+
+resource "aws_subnet" "wagtail_c" {
+  vpc_id = aws_vpc.wagtail.id
+  cidr_block = var.subnet_cidr_block_c
+  availability_zone = "${var.region}c"
+  tags = {
+    Name = "${var.subnet_name}_c"
+  }
+}
+
+resource "aws_security_group" "wagtail_rds" {
+  name = var.security_group_name
+  description = "Accept Postgres connections"
+  vpc_id = aws_vpc.wagtail.id
+
+  /*
+  ingress {
+    from_port = 5432
+    to_port = 5432
+    protocol = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  */
+}
 
 
 
@@ -309,6 +398,118 @@ POLICY
 
 
 
+
+
+
+
+
+
+
+resource "random_password" "master_password" {
+  length  = 32
+  special = false
+}
+
+resource "aws_db_subnet_group" "wagtail" {
+  name = var.subnet_group_name
+  subnet_ids = [aws_subnet.wagtail_a.id, aws_subnet.wagtail_b.id, aws_subnet.wagtail_c.id]
+}
+
+resource "aws_rds_cluster" "wagtail" {
+  cluster_identifier      = var.cluster_identifier
+  engine                  = "aurora-postgresql"
+  availability_zones      = ["${var.region}a", "${var.region}b", "${var.region}c"]
+  database_name           = "wagtail"
+  master_username         = "postgres"
+  master_password         = random_password.master_password.result
+  apply_immediately       = true
+  engine_mode             = "serverless"
+  deletion_protection     = true
+  db_subnet_group_name    = aws_db_subnet_group.wagtail.name
+  vpc_security_group_ids  = [aws_security_group.wagtail_rds.id]
+  enable_http_endpoint    = true
+
+  scaling_configuration {
+    auto_pause            = true
+    min_capacity          = 2
+    max_capacity          = 4
+    seconds_until_auto_pause = 300
+  }
+}
+
+resource "aws_secretsmanager_secret" "wagtail_rds_master" {
+  name = var.rds_master_secret_name
+}
+
+resource "aws_secretsmanager_secret_version" "wagtail_rds_master" {
+  secret_id = aws_secretsmanager_secret.wagtail_rds_master.id
+  secret_string = jsonencode({
+    "dbInstanceIdentifier" = aws_rds_cluster.wagtail.cluster_identifier
+    "engine" = aws_rds_cluster.wagtail.engine
+    "host" = aws_rds_cluster.wagtail.endpoint
+    "port" = aws_rds_cluster.wagtail.port
+    "resourceId" = aws_rds_cluster.wagtail.cluster_resource_id
+    "username" = aws_rds_cluster.wagtail.master_username
+    "password" = aws_rds_cluster.wagtail.master_password
+  })
+}
+
+
+
+# provider "postgresql" {
+#   host = aws_rds_cluster.wagtail.endpoint
+#   username = aws_rds_cluster.wagtail.master_username
+#   password = aws_rds_cluster.wagtail.master_password
+# }
+
+provider "rdsdataservice" {
+  region  = var.region
+  # profile = var.aws_profile
+}
+
+resource "random_password" "wagtail_db_password" {
+  length  = 32
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "wagtail_rds_app" {
+  name = var.rds_app_secret_name
+}
+
+resource "aws_secretsmanager_secret_version" "wagtail_rds_app" {
+  secret_id = aws_secretsmanager_secret.wagtail_rds_app.id
+  secret_string = jsonencode({
+    "dbInstanceIdentifier" = aws_rds_cluster.wagtail.cluster_identifier
+    "engine" = aws_rds_cluster.wagtail.engine
+    "host" = aws_rds_cluster.wagtail.endpoint
+    "port" = aws_rds_cluster.wagtail.port
+    "resourceId" = aws_rds_cluster.wagtail.cluster_resource_id
+    "username" = "wagtail"
+    "password" = random_password.wagtail_db_password.result
+  })
+}
+
+# create role wagtail with password '...' login inherit;
+# grant wagtail to postgres;
+
+# resource "rdsdataservice_postgres_role" "wagtail" {
+#   name         = "wagtail"
+#   resource_arn = aws_rds_cluster.wagtail.arn
+#   secret_arn   = aws_secretsmanager_secret.wagtail_rds_master.arn
+#   password     = random_password.wagtail_db_password.result
+#   login        = true
+#   create_database = false
+#   create_role  = false
+#   inherit      = true
+#   superuser    = false
+# }
+
+resource "rdsdataservice_postgres_database" "wagtail" {
+  name         = "wagtail"
+  resource_arn = aws_rds_cluster.wagtail.arn
+  secret_arn   = aws_secretsmanager_secret.wagtail_rds_master.arn
+  owner        = "wagtail"
+}
 
 
 
