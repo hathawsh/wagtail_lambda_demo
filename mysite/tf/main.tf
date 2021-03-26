@@ -2,83 +2,15 @@ variable "region" {
   type = string
 }
 
-variable "code_bucket" {
+variable "name_prefix" {
   type = string
 }
 
-variable "media_bucket" {
-  type = string
-}
-
-variable "lambda_name" {
-  type = string
-}
-
-variable "role_name" {
-  type = string
-}
-
-variable "apigw_name" {
-  type = string
-}
-
-variable "cwgroup_name" {
-  type = string
-}
-
-variable "xray_policy_name" {
-  type = string
-}
-
-variable "secret_name" {
-  type = string
-}
-
-variable "django_settings_module" {
-  type = string
-}
-
-variable "vpc_name" {
-  type = string
-}
-
-variable "subnet_name" {
-  type = string
-}
-
-variable "subnet_group_name" {
-  type = string
-}
-
-variable "security_group_name" {
+variable "environment_tag" {
   type = string
 }
 
 variable "vpc_cidr_block" {
-  type = string
-}
-
-variable "subnet_cidr_block_a" {
-  type = string
-}
-
-variable "subnet_cidr_block_b" {
-  type = string
-}
-
-variable "subnet_cidr_block_c" {
-  type = string
-}
-
-variable "cluster_identifier" {
-  type = string
-}
-
-variable "rds_master_secret_name" {
-  type = string
-}
-
-variable "rds_app_secret_name" {
   type = string
 }
 
@@ -116,9 +48,14 @@ provider "aws" {
 
 
 
-resource "aws_iam_role" "wagtail" {
-  name = var.role_name
+resource "aws_iam_role" "lambda_role" {
+  name = "${var.name_prefix}_lambda_role"
   path = "/service-role/"
+
+  tags = {
+    Environment = var.environment_tag
+  }
+
   assume_role_policy = <<POLICY
 {
   "Version": "2012-10-17",
@@ -135,8 +72,9 @@ resource "aws_iam_role" "wagtail" {
 POLICY
 }
 
-resource "aws_iam_policy" "wagtail_xray" {
-  name = var.xray_policy_name
+resource "aws_iam_policy" "xray_policy" {
+  name = "${var.name_prefix}_xray_policy"
+
   policy = <<POLICY
 {
   "Version": "2012-10-17",
@@ -157,13 +95,90 @@ POLICY
 }
 
 resource "aws_iam_role_policy_attachment" "AWSLambdaBasicExecutionRole" {
-  role = aws_iam_role.wagtail.name
+  role = aws_iam_role.lambda_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-resource "aws_iam_role_policy_attachment" "wagtail_xray" {
-  role = aws_iam_role.wagtail.name
-  policy_arn = aws_iam_policy.wagtail_xray.arn
+resource "aws_iam_role_policy_attachment" "xray_policy" {
+  role = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.xray_policy.arn
+}
+
+resource "aws_iam_role_policy_attachment" "AWSLambdaVPCAccessExecutionRole" {
+  role = aws_iam_role.lambda_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
+
+
+
+
+
+
+resource "aws_vpc" "vpc" {
+  cidr_block = var.vpc_cidr_block
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "${var.name_prefix}_vpc"
+    Environment = var.environment_tag
+  }
+}
+
+resource "aws_route_table" "main_rt" {
+  vpc_id = aws_vpc.vpc.id
+
+  tags = {
+    Name = "${var.name_prefix}_main_rt"
+    Environment = var.environment_tag
+  }
+}
+
+resource "aws_main_route_table_association" "main_rt_assoc" {
+  vpc_id = aws_vpc.vpc.id
+  route_table_id = aws_route_table.main_rt.id
+}
+
+resource "aws_route_table" "subnet_rt" {
+  vpc_id = aws_vpc.vpc.id
+
+  tags = {
+    Name = "${var.name_prefix}_subnet_rt"
+    Environment = var.environment_tag
+  }
+}
+
+resource "aws_subnet" "a" {
+  vpc_id = aws_vpc.vpc.id
+  cidr_block = cidrsubnet(var.vpc_cidr_block, 8, 1)
+  availability_zone = "${var.region}a"
+
+  tags = {
+    Name = "${var.name_prefix}_subnet_a"
+    Environment = var.environment_tag
+  }
+}
+
+resource "aws_route_table_association" "a" {
+  subnet_id      = aws_subnet.a.id
+  route_table_id = aws_route_table.subnet_rt.id
+}
+
+resource "aws_subnet" "b" {
+  vpc_id = aws_vpc.vpc.id
+  cidr_block = cidrsubnet(var.vpc_cidr_block, 8, 2)
+  availability_zone = "${var.region}b"
+
+  tags = {
+    Name = "${var.name_prefix}_subnet_b"
+    Environment = var.environment_tag
+  }
+}
+
+resource "aws_route_table_association" "b" {
+  subnet_id      = aws_subnet.b.id
+  route_table_id = aws_route_table.subnet_rt.id
 }
 
 
@@ -173,20 +188,57 @@ resource "aws_iam_role_policy_attachment" "wagtail_xray" {
 
 
 
+resource "aws_security_group" "lambda_sg" {
+  name = "${var.name_prefix}_lambda_sg"
+  vpc_id = aws_vpc.vpc.id
 
+  tags = {
+    Environment = var.environment_tag
+  }
 
-
-
-
-
-
-
-resource "aws_s3_bucket" "code_bucket" {
-  bucket = var.code_bucket
+  egress {
+    from_port = 0
+    to_port = 0
+    protocol = "all"
+    cidr_blocks = [var.vpc_cidr_block]
+  }
 }
 
-resource "aws_s3_bucket_public_access_block" "code_bucket" {
-  bucket = aws_s3_bucket.code_bucket.id
+resource "aws_security_group" "rds_sg" {
+  name = "${var.name_prefix}_rds_sg"
+  vpc_id = aws_vpc.vpc.id
+
+  tags = {
+    Environment = var.environment_tag
+  }
+
+  ingress {
+    from_port = 5432
+    to_port = 5432
+    protocol = "tcp"
+    cidr_blocks = [var.vpc_cidr_block]
+  }
+}
+
+
+
+
+
+
+
+resource "random_id" "bucket_id" {
+  byte_length  = 8
+}
+
+resource "aws_s3_bucket" "code" {
+  bucket = "${var.name_prefix}-${random_id.bucket_id.hex}-code"
+  tags = {
+    Environment = var.environment_tag
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "code_not_public" {
+  bucket = aws_s3_bucket.code.id
 
   block_public_acls = true
   block_public_policy = true
@@ -194,54 +246,164 @@ resource "aws_s3_bucket_public_access_block" "code_bucket" {
   restrict_public_buckets = true
 }
 
-resource "aws_s3_bucket_object" "wagtail_lambda_zip" {
-  bucket = aws_s3_bucket.code_bucket.bucket
-  key    = "wagtail_lambda.zip"
+resource "aws_s3_bucket_object" "lambda_zip" {
+  bucket = aws_s3_bucket.code.bucket
+  key    = "lambda-${filemd5("../out/lambda.zip")}.zip"
   source = "../out/lambda.zip"
-  etag   = filemd5("../out/lambda.zip")
 }
 
-resource "aws_lambda_function" "wagtail" {
-  function_name = var.lambda_name
-  role = aws_iam_role.wagtail.arn
+
+
+
+
+
+resource "aws_s3_bucket" "media" {
+  bucket = "${var.name_prefix}-${random_id.bucket_id.hex}-media"
+  tags = {
+    Environment = var.environment_tag
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "media_not_public" {
+  bucket = aws_s3_bucket.media.id
+
+  block_public_acls = true
+  block_public_policy = true
+  ignore_public_acls = true
+  restrict_public_buckets = true
+}
+
+
+
+
+
+
+
+locals {
+  lambda_variables = {
+    "ENV_SECRET_ID" = aws_secretsmanager_secret.env_secret.arn
+    "DJANGO_SETTINGS_MODULE" = "mysite.settings.production"
+    "DJANGO_DB_ENGINE" = "django.db.backends.postgresql_psycopg2"
+    "DJANGO_DB_NAME" = "appdb"
+    "DJANGO_DB_USER" = "appuser"
+    # DJANGO_DB_PASSWORD is in the secret
+    "DJANGO_DB_HOST" = aws_rds_cluster.rds.endpoint
+    "DJANGO_DB_PORT" = aws_rds_cluster.rds.port
+  }
+}
+
+
+
+
+
+
+resource "aws_lambda_function" "wsgi" {
+  function_name = "${var.name_prefix}_wsgi"
+  role = aws_iam_role.lambda_role.arn
   handler = "lambda_function.lambda_handler"
-  s3_bucket = aws_s3_bucket_object.wagtail_lambda_zip.bucket
-  s3_key = aws_s3_bucket_object.wagtail_lambda_zip.key
-  s3_object_version = aws_s3_bucket_object.wagtail_lambda_zip.version_id
+  s3_bucket = aws_s3_bucket_object.lambda_zip.bucket
+  s3_key = aws_s3_bucket_object.lambda_zip.key
+  s3_object_version = aws_s3_bucket_object.lambda_zip.version_id
   memory_size = "256"
   publish = false
   timeout = "180"
   runtime = "python3.8"
 
   environment {
-    variables = {
-      # "DJANGO_SETTINGS_MODULE" = vars.django_settings_module
-      "ENV_SECRET_ID" = aws_secretsmanager_secret.env.arn
-      # "DJANGO_DB_ENGINE" = "django.db.backends.postgresql_psycopg2"
-      # "DJANGO_DB_NAME" = "wagtail"
-      # "DJANGO_DB_USER" = "lambda"
-      # # DJANGO_DB_PASSWORD is in the secret
-      # "DJANGO_DB_HOST" = 
-      # "DJANGO_DB_PORT" = "5432"
-
-      # "PYPICLOUD_CONF_REGION" = var.region
-      # "AUTH_SECRET_ID" = aws_secretsmanager_secret.auth.arn
-      # "BUCKET" = var.package_bucket
-      # "BUCKET_REGION" = var.region
-      # "DYNAMO_REGION" = var.region
-    }
+    variables = local.lambda_variables
   }
 
   tracing_config {
     mode = "Active"
   }
+
+  vpc_config {
+    subnet_ids = [aws_subnet.a.id, aws_subnet.b.id]
+    security_group_ids = [aws_security_group.lambda_sg.id]
+  }
+
+  tags = {
+    Environment = var.environment_tag
+  }
 }
 
-resource "aws_lambda_permission" "wagtail" {
+resource "aws_lambda_permission" "wsgi_perm" {
   action = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.wagtail.arn
+  function_name = aws_lambda_function.wsgi.arn
   principal = "apigateway.amazonaws.com"
-  source_arn = "${aws_apigatewayv2_api.wagtail.execution_arn}/*/${aws_apigatewayv2_stage.wagtail_default.name}"
+  source_arn = "${aws_apigatewayv2_api.apigw.execution_arn}/*/${aws_apigatewayv2_stage.default.name}"
+}
+
+
+
+
+
+
+
+
+resource "aws_lambda_function" "manage" {
+  function_name = "${var.name_prefix}_manage"
+  role = aws_iam_role.lambda_role.arn
+  handler = "lambda_function.manage"
+  s3_bucket = aws_s3_bucket_object.lambda_zip.bucket
+  s3_key = aws_s3_bucket_object.lambda_zip.key
+  s3_object_version = aws_s3_bucket_object.lambda_zip.version_id
+  memory_size = "512"
+  publish = false
+  timeout = "60"
+  runtime = "python3.8"
+
+  environment {
+    variables = local.lambda_variables
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  vpc_config {
+    subnet_ids = [aws_subnet.a.id, aws_subnet.b.id]
+    security_group_ids = [aws_security_group.lambda_sg.id]
+  }
+
+  tags = {
+    Environment = var.environment_tag
+  }
+}
+
+
+
+
+
+
+resource "aws_lambda_function" "hello" {
+  function_name = "${var.name_prefix}_hello"
+  role = aws_iam_role.lambda_role.arn
+  handler = "lambda_function.hello"
+  s3_bucket = aws_s3_bucket_object.lambda_zip.bucket
+  s3_key = aws_s3_bucket_object.lambda_zip.key
+  s3_object_version = aws_s3_bucket_object.lambda_zip.version_id
+  memory_size = "256"
+  publish = false
+  timeout = "5"
+  runtime = "python3.8"
+
+  environment {
+    variables = local.lambda_variables
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  vpc_config {
+    subnet_ids = [aws_subnet.a.id, aws_subnet.b.id]
+    security_group_ids = [aws_security_group.lambda_sg.id]
+  }
+
+  tags = {
+    Environment = var.environment_tag
+  }
 }
 
 
@@ -257,43 +419,54 @@ resource "aws_lambda_permission" "wagtail" {
 
 
 
+resource "aws_cloudwatch_log_group" "log_group" {
+  name = "${var.name_prefix}_log_group"
 
-resource "aws_cloudwatch_log_group" "wagtail" {
-  name = var.cwgroup_name
+  tags = {
+    Environment = var.environment_tag
+  }
 }
 
-resource "aws_apigatewayv2_api" "wagtail" {
-  name = var.apigw_name
+resource "aws_apigatewayv2_api" "apigw" {
+  name = "${var.name_prefix}_apigw"
   protocol_type = "HTTP"
+
+  tags = {
+    Environment = var.environment_tag
+  }
 }
 
-resource "aws_apigatewayv2_integration" "wagtail" {
-  api_id = aws_apigatewayv2_api.wagtail.id
+resource "aws_apigatewayv2_integration" "integration" {
+  api_id = aws_apigatewayv2_api.apigw.id
   integration_type = "AWS_PROXY"
 
   connection_type = "INTERNET"
   // content_handling_strategy = "CONVERT_TO_TEXT"
   // description               = "Lambda example"
   integration_method = "POST"
-  integration_uri = aws_lambda_function.wagtail.arn
+  integration_uri = aws_lambda_function.wsgi.arn
   passthrough_behavior = "WHEN_NO_MATCH"
   payload_format_version = "2.0"
 }
 
-resource "aws_apigatewayv2_route" "wagtail" {
-  api_id = aws_apigatewayv2_api.wagtail.id
+resource "aws_apigatewayv2_route" "route" {
+  api_id = aws_apigatewayv2_api.apigw.id
   route_key = "$default"
-  target = "integrations/${aws_apigatewayv2_integration.wagtail.id}"
+  target = "integrations/${aws_apigatewayv2_integration.integration.id}"
 }
 
-resource "aws_apigatewayv2_stage" "wagtail_default" {
-  api_id = aws_apigatewayv2_api.wagtail.id
-  name = "$default"
+resource "aws_apigatewayv2_stage" "default" {
+  api_id = aws_apigatewayv2_api.apigw.id
+  name = "${var.name_prefix}_apigw_stage"  # "$default" ?
   auto_deploy = true
 
   access_log_settings {
-    destination_arn = aws_cloudwatch_log_group.wagtail.arn
+    destination_arn = aws_cloudwatch_log_group.log_group.arn
     format = "$context.identity.sourceIp - - [$context.requestTime] \"$context.httpMethod $context.routeKey $context.protocol\" $context.status $context.responseLength $context.requestId $context.integrationErrorMessage"
+  }
+
+  tags = {
+    Environment = var.environment_tag
   }
 }
 
@@ -312,21 +485,24 @@ resource "aws_apigatewayv2_stage" "wagtail_default" {
 
 
 
-resource "aws_secretsmanager_secret" "env" {
-  name = var.secret_name
+resource "aws_secretsmanager_secret" "env_secret" {
+  name = "${var.name_prefix}_env_secret"
   recovery_window_in_days = 30
-  description = "Secret env vars for the Wagtail Lambda function"
+
+  tags = {
+    Environment = var.environment_tag
+  }
 }
 
-resource "aws_secretsmanager_secret_policy" "env" {
-  secret_arn = aws_secretsmanager_secret.env.arn
+resource "aws_secretsmanager_secret_policy" "env_secret" {
+  secret_arn = aws_secretsmanager_secret.env_secret.arn
   policy = <<POLICY
 {
   "Version" : "2012-10-17",
   "Statement" : [ {
     "Effect" : "Allow",
     "Principal" : {
-      "AWS" : "${aws_iam_role.wagtail.arn}"
+      "AWS" : "${aws_iam_role.lambda_role.arn}"
     },
     "Action" : [ "secretsmanager:GetSecretValue" ],
     "Resource" : "*"
@@ -335,62 +511,20 @@ resource "aws_secretsmanager_secret_policy" "env" {
 POLICY
 }
 
-
-
-
-
-
-
-
-
-resource "aws_vpc" "wagtail" {
-  cidr_block = var.vpc_cidr_block
-  tags = {
-    Name = var.vpc_name
-  }
+resource "random_password" "django_secret_key" {
+  length  = 64
+  special = false
 }
 
-resource "aws_subnet" "wagtail_a" {
-  vpc_id = aws_vpc.wagtail.id
-  cidr_block = var.subnet_cidr_block_a
-  availability_zone = "${var.region}a"
-  tags = {
-    Name = "${var.subnet_name}_a"
-  }
+resource "aws_secretsmanager_secret_version" "env_secret" {
+  secret_id = aws_secretsmanager_secret.env_secret.id
+  secret_string = jsonencode({
+    "DJANGO_SECRET_KEY": random_password.django_secret_key.result
+  })
 }
 
-resource "aws_subnet" "wagtail_b" {
-  vpc_id = aws_vpc.wagtail.id
-  cidr_block = var.subnet_cidr_block_b
-  availability_zone = "${var.region}b"
-  tags = {
-    Name = "${var.subnet_name}_b"
-  }
-}
 
-resource "aws_subnet" "wagtail_c" {
-  vpc_id = aws_vpc.wagtail.id
-  cidr_block = var.subnet_cidr_block_c
-  availability_zone = "${var.region}c"
-  tags = {
-    Name = "${var.subnet_name}_c"
-  }
-}
 
-resource "aws_security_group" "wagtail_rds" {
-  name = var.security_group_name
-  description = "Accept Postgres connections"
-  vpc_id = aws_vpc.wagtail.id
-
-  /*
-  ingress {
-    from_port = 5432
-    to_port = 5432
-    protocol = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  */
-}
 
 
 
@@ -410,23 +544,26 @@ resource "random_password" "master_password" {
   special = false
 }
 
-resource "aws_db_subnet_group" "wagtail" {
-  name = var.subnet_group_name
-  subnet_ids = [aws_subnet.wagtail_a.id, aws_subnet.wagtail_b.id, aws_subnet.wagtail_c.id]
+resource "aws_db_subnet_group" "subnet_group" {
+  name = "${var.name_prefix}_subnet_group"
+  subnet_ids = [aws_subnet.a.id, aws_subnet.b.id]
+
+  tags = {
+    Environment = var.environment_tag
+  }
 }
 
-resource "aws_rds_cluster" "wagtail" {
-  cluster_identifier      = var.cluster_identifier
+resource "aws_rds_cluster" "rds" {
+  cluster_identifier      = "${var.name_prefix}-rds"
   engine                  = "aurora-postgresql"
-  availability_zones      = ["${var.region}a", "${var.region}b", "${var.region}c"]
-  database_name           = "wagtail"
+#  availability_zones      = ["${var.region}a", "${var.region}b"]
   master_username         = "postgres"
   master_password         = random_password.master_password.result
   apply_immediately       = true
   engine_mode             = "serverless"
   deletion_protection     = true
-  db_subnet_group_name    = aws_db_subnet_group.wagtail.name
-  vpc_security_group_ids  = [aws_security_group.wagtail_rds.id]
+  db_subnet_group_name    = aws_db_subnet_group.subnet_group.name
+  vpc_security_group_ids  = [aws_security_group.rds_sg.id]
   enable_http_endpoint    = true
 
   scaling_configuration {
@@ -435,31 +572,38 @@ resource "aws_rds_cluster" "wagtail" {
     max_capacity          = 4
     seconds_until_auto_pause = 300
   }
+
+  tags = {
+    Environment = var.environment_tag
+  }
 }
 
-resource "aws_secretsmanager_secret" "wagtail_rds_master" {
-  name = var.rds_master_secret_name
+resource "aws_secretsmanager_secret" "rds_master_credentials" {
+  name = "${var.name_prefix}_rds_master_credentials"
+  tags = {
+    Environment = var.environment_tag
+  }
 }
 
-resource "aws_secretsmanager_secret_version" "wagtail_rds_master" {
-  secret_id = aws_secretsmanager_secret.wagtail_rds_master.id
+resource "aws_secretsmanager_secret_version" "rds_master_credentials" {
+  secret_id = aws_secretsmanager_secret.rds_master_credentials.id
   secret_string = jsonencode({
-    "dbInstanceIdentifier" = aws_rds_cluster.wagtail.cluster_identifier
-    "engine" = aws_rds_cluster.wagtail.engine
-    "host" = aws_rds_cluster.wagtail.endpoint
-    "port" = aws_rds_cluster.wagtail.port
-    "resourceId" = aws_rds_cluster.wagtail.cluster_resource_id
-    "username" = aws_rds_cluster.wagtail.master_username
-    "password" = aws_rds_cluster.wagtail.master_password
+    "dbInstanceIdentifier" = aws_rds_cluster.rds.cluster_identifier
+    "engine" = aws_rds_cluster.rds.engine
+    "host" = aws_rds_cluster.rds.endpoint
+    "port" = aws_rds_cluster.rds.port
+    "resourceId" = aws_rds_cluster.rds.cluster_resource_id
+    "username" = aws_rds_cluster.rds.master_username
+    "password" = aws_rds_cluster.rds.master_password
   })
 }
 
 
 
 # provider "postgresql" {
-#   host = aws_rds_cluster.wagtail.endpoint
-#   username = aws_rds_cluster.wagtail.master_username
-#   password = aws_rds_cluster.wagtail.master_password
+#   host = aws_rds_cluster.rds.endpoint
+#   username = aws_rds_cluster.rds.master_username
+#   password = aws_rds_cluster.rds.master_password
 # }
 
 provider "rdsdataservice" {
@@ -467,36 +611,41 @@ provider "rdsdataservice" {
   # profile = var.aws_profile
 }
 
-resource "random_password" "wagtail_db_password" {
+resource "random_password" "app_db_password" {
   length  = 32
   special = false
 }
 
-resource "aws_secretsmanager_secret" "wagtail_rds_app" {
-  name = var.rds_app_secret_name
+resource "aws_secretsmanager_secret" "rds_app_credentials" {
+  name = "${var.name_prefix}_rds_app_credentials"
+  tags = {
+    Environment = var.environment_tag
+  }
 }
 
-resource "aws_secretsmanager_secret_version" "wagtail_rds_app" {
-  secret_id = aws_secretsmanager_secret.wagtail_rds_app.id
+resource "aws_secretsmanager_secret_version" "rds_app_credentials" {
+  secret_id = aws_secretsmanager_secret.rds_app_credentials.id
   secret_string = jsonencode({
-    "dbInstanceIdentifier" = aws_rds_cluster.wagtail.cluster_identifier
-    "engine" = aws_rds_cluster.wagtail.engine
-    "host" = aws_rds_cluster.wagtail.endpoint
-    "port" = aws_rds_cluster.wagtail.port
-    "resourceId" = aws_rds_cluster.wagtail.cluster_resource_id
-    "username" = "wagtail"
-    "password" = random_password.wagtail_db_password.result
+    "dbInstanceIdentifier" = aws_rds_cluster.rds.cluster_identifier
+    "engine" = aws_rds_cluster.rds.engine
+    "host" = aws_rds_cluster.rds.endpoint
+    "port" = aws_rds_cluster.rds.port
+    "resourceId" = aws_rds_cluster.rds.cluster_resource_id
+    "username" = "appuser"
+    "password" = random_password.app_db_password.result
   })
 }
 
-# create role wagtail with password '...' login inherit;
-# grant wagtail to postgres;
+# THIS WORKS:
+# create role appuser with password '...' login inherit;
+# grant appuser to postgres;
 
-# resource "rdsdataservice_postgres_role" "wagtail" {
-#   name         = "wagtail"
-#   resource_arn = aws_rds_cluster.wagtail.arn
-#   secret_arn   = aws_secretsmanager_secret.wagtail_rds_master.arn
-#   password     = random_password.wagtail_db_password.result
+# THIS DOESN'T YET:
+# resource "rdsdataservice_postgres_role" "app_db_role" {
+#   name         = "appuser"
+#   resource_arn = aws_rds_cluster.rds.arn
+#   secret_arn   = aws_secretsmanager_secret.rds_master_credentials.arn
+#   password     = random_password.app_db_password.result
 #   login        = true
 #   create_database = false
 #   create_role  = false
@@ -504,27 +653,9 @@ resource "aws_secretsmanager_secret_version" "wagtail_rds_app" {
 #   superuser    = false
 # }
 
-resource "rdsdataservice_postgres_database" "wagtail" {
-  name         = "wagtail"
-  resource_arn = aws_rds_cluster.wagtail.arn
-  secret_arn   = aws_secretsmanager_secret.wagtail_rds_master.arn
-  owner        = "wagtail"
+resource "rdsdataservice_postgres_database" "appdb" {
+  name         = "appdb"
+  resource_arn = aws_rds_cluster.rds.arn
+  secret_arn   = aws_secretsmanager_secret.rds_master_credentials.arn
+  owner        = "appuser"
 }
-
-
-
-
-
-resource "aws_s3_bucket" "media_bucket" {
-  bucket = var.media_bucket
-}
-
-resource "aws_s3_bucket_public_access_block" "media_bucket" {
-  bucket = aws_s3_bucket.media_bucket.id
-
-  block_public_acls = true
-  block_public_policy = true
-  ignore_public_acls = true
-  restrict_public_buckets = true
-}
-

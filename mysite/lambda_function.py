@@ -3,15 +3,28 @@
 import lambda_venv_path  # noqa
 
 
+def hello(event, context):
+    """Entry point for minimal testing"""
+    if event.get('install_secrets'):
+        install_secrets()
+
+    return {
+        'message': 'Hello from the Wagtail Lambda Demo',
+        'event': event,
+        'context': repr(context),
+    }
+
+
 def install_secrets():
     """Add the secrets from the secret named by ENV_SECRET_ID to os.environ"""
-    import boto3
-    import json
     import os
 
     secret_id = os.environ.get('ENV_SECRET_ID')
     if not secret_id:
         return
+
+    import boto3
+    import json
 
     session = boto3.session.Session()
     client = session.client('secretsmanager')
@@ -20,11 +33,30 @@ def install_secrets():
     os.environ.update(overlay)
 
 
-def get_lambda_handler():
-    from apig_wsgi import make_lambda_handler
-    from mysite.wsgi import application
-    return make_lambda_handler(application)
+def manage(event, context):
+    """Entry point for running a management command"""
+    install_secrets()
+
+    command = event['command']
+    args = event.get('args', ())
+    kwargs = event.get('kwargs', {})
+    install_secrets()
+    from django.core import management
+    return management.call_command(command, *args, **kwargs)
 
 
-install_secrets()
-lambda_handler = get_lambda_handler()
+_real_handler = None
+
+
+def lambda_handler(event, context):
+    """Entry point for web requests"""
+    global _real_handler
+
+    if _real_handler is None:
+        install_secrets()
+
+        from apig_wsgi import make_lambda_handler
+        from mysite.wsgi import application
+        _real_handler = make_lambda_handler(application)
+
+    return _real_handler(event, context)
