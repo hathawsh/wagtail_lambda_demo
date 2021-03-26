@@ -520,6 +520,7 @@ resource "aws_secretsmanager_secret_version" "env_secret" {
   secret_id = aws_secretsmanager_secret.env_secret.id
   secret_string = jsonencode({
     "DJANGO_SECRET_KEY": random_password.django_secret_key.result
+    "DJANGO_DB_PASSWORD": random_password.app_db_password.result
   })
 }
 
