@@ -220,6 +220,42 @@ resource "aws_security_group" "rds_sg" {
   }
 }
 
+resource "aws_security_group" "vpce_sg" {
+  name = "${var.name_prefix}_vpce_sg"
+  vpc_id = aws_vpc.vpc.id
+
+  tags = {
+    Environment = var.environment_tag
+  }
+
+  ingress {
+    from_port = 0
+    to_port = 0
+    protocol = "-1"
+    cidr_blocks = [var.vpc_cidr_block]
+  }
+}
+
+
+
+
+
+
+resource "aws_vpc_endpoint" "secretsmanager" {
+  vpc_id = aws_vpc.vpc.id
+  service_name = "com.amazonaws.${var.region}.secretsmanager"
+  vpc_endpoint_type = "Interface"
+  private_dns_enabled = true
+  security_group_ids = [aws_security_group.vpce_sg.id]
+  subnet_ids = [aws_subnet.a.id, aws_subnet.b.id]
+  auto_accept = true
+
+  tags = {
+    Name = "${var.name_prefix}_vpce_secretsmanager"
+    Environment = var.environment_tag
+  }
+}
+
 
 
 
