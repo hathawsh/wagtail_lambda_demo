@@ -22,9 +22,9 @@ terraform {
       # version = "~> 3.0"
     }
 
-    rdsdataservice = {
-      source = "awsiv/rdsdataservice"
-    }
+    # rdsdataservice = {
+    #   source = "awsiv/rdsdataservice"
+    # }
   }
 }
 
@@ -601,16 +601,15 @@ resource "aws_secretsmanager_secret_version" "rds_master_credentials" {
 
 
 
+
+
+
+
 # provider "postgresql" {
 #   host = aws_rds_cluster.rds.endpoint
 #   username = aws_rds_cluster.rds.master_username
 #   password = aws_rds_cluster.rds.master_password
 # }
-
-provider "rdsdataservice" {
-  region  = var.region
-  # profile = var.aws_profile
-}
 
 resource "random_password" "app_db_password" {
   length  = 32
@@ -637,11 +636,25 @@ resource "aws_secretsmanager_secret_version" "rds_app_credentials" {
   })
 }
 
+
+
+
+
+
+
+
+
 # THIS WORKS:
 # create role appuser with password '...' login inherit;
-# grant appuser to postgres;
+# create database appdb owner appuser;
+# -- grant appuser to postgres;
 
-# THIS DOESN'T YET:
+# provider "rdsdataservice" {
+#   region  = var.region
+#   # profile = var.aws_profile
+# }
+
+# THIS DOESN'T WORK YET:
 # resource "rdsdataservice_postgres_role" "app_db_role" {
 #   name         = "appuser"
 #   resource_arn = aws_rds_cluster.rds.arn
@@ -654,9 +667,10 @@ resource "aws_secretsmanager_secret_version" "rds_app_credentials" {
 #   superuser    = false
 # }
 
-resource "rdsdataservice_postgres_database" "appdb" {
-  name         = "appdb"
-  resource_arn = aws_rds_cluster.rds.arn
-  secret_arn   = aws_secretsmanager_secret.rds_master_credentials.arn
-  owner        = "appuser"
-}
+# THIS WORKS, BUT DEPENDS ON THE ROLE:
+# resource "rdsdataservice_postgres_database" "appdb" {
+#   name         = "appdb"
+#   resource_arn = aws_rds_cluster.rds.arn
+#   secret_arn   = aws_secretsmanager_secret.rds_master_credentials.arn
+#   owner        = "appuser"
+# }
