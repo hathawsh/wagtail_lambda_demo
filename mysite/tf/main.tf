@@ -14,6 +14,10 @@ variable "vpc_cidr_block" {
   type = string
 }
 
+variable "default_from_email" {
+  type = string
+}
+
 
 terraform {
   required_providers {
@@ -109,6 +113,44 @@ resource "aws_iam_role_policy_attachment" "AWSLambdaVPCAccessExecutionRole" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
+
+
+
+
+
+
+
+resource "aws_iam_user" "smtp_user" {
+  name = "${var.name_prefix}_smtp_user"
+  path = "/system/"
+
+  tags = {
+    Environment = var.environment_tag
+  }
+}
+
+resource "aws_iam_user_policy" "smtp_user_policy" {
+  name = "${var.name_prefix}_smtp_user_policy"
+  user = aws_iam_user.smtp_user.name
+  policy = <<POLICY
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "ses:SendRawEmail",
+      "Resource": "*"
+    }
+  ]
+}
+POLICY
+}
+
+resource "aws_iam_access_key" "smtp_user" {
+  # This resource causes an access key to be generated.
+  # Also generates and stores an SMTP password.
+  user = aws_iam_user.smtp_user.name
+}
 
 
 
@@ -252,6 +294,21 @@ resource "aws_vpc_endpoint" "secretsmanager" {
 
   tags = {
     Name = "${var.name_prefix}_vpce_secretsmanager"
+    Environment = var.environment_tag
+  }
+}
+
+resource "aws_vpc_endpoint" "email_smtp" {
+  vpc_id = aws_vpc.vpc.id
+  service_name = "com.amazonaws.${var.region}.email-smtp"
+  vpc_endpoint_type = "Interface"
+  private_dns_enabled = true
+  security_group_ids = [aws_security_group.vpce_sg.id]
+  subnet_ids = [aws_subnet.a.id, aws_subnet.b.id]
+  auto_accept = true
+
+  tags = {
+    Name = "${var.name_prefix}_vpce_email_smtp"
     Environment = var.environment_tag
   }
 }
@@ -406,6 +463,7 @@ resource aws_cloudfront_distribution cf_static {
   enabled = true
   price_class = "PriceClass_100"
   is_ipv6_enabled = true
+  default_root_object = "index.html"
 
   origin {
     origin_id = "S3-${local.static_bucket}"
@@ -457,11 +515,18 @@ locals {
     "DJANGO_DB_ENGINE" = "django.db.backends.postgresql_psycopg2"
     "DJANGO_DB_NAME" = "appdb"
     "DJANGO_DB_USER" = "appuser"
-    # DJANGO_DB_PASSWORD is in the secret
+    # DJANGO_DB_PASSWORD is in the env secret
     "DJANGO_DB_HOST" = aws_rds_cluster.rds.endpoint
     "DJANGO_DB_PORT" = aws_rds_cluster.rds.port
     "ALLOWED_HOSTS" = aws_apigatewayv2_api.apigw.api_endpoint
     "STATIC_URL" = local.static_url
+    "DEFAULT_FROM_EMAIL" = var.default_from_email
+    "EMAIL_HOST" = "email-smtp.${var.region}.amazonaws.com"
+    "EMAIL_HOST_USER" = aws_iam_access_key.smtp_user.id
+    # EMAIL_HOST_PASSWORD is in the env secret
+    # The DJANGO_SUPERUSER_* env vars are used when running createsuperuser.
+    "DJANGO_SUPERUSER_USERNAME" = "admin"
+    "DJANGO_SUPERUSER_EMAIL" = var.default_from_email
   }
 }
 
@@ -523,7 +588,7 @@ resource "aws_lambda_function" "manage" {
   s3_object_version = aws_s3_bucket_object.lambda_zip.version_id
   memory_size = "512"
   publish = false
-  timeout = "300"
+  timeout = "90"
   runtime = "python3.8"
 
   environment {
@@ -689,11 +754,18 @@ resource "random_password" "django_secret_key" {
   special = false
 }
 
+resource "random_password" "init_superuser_password" {
+  length  = 16
+  special = true
+}
+
 resource "aws_secretsmanager_secret_version" "env_secret" {
   secret_id = aws_secretsmanager_secret.env_secret.id
   secret_string = jsonencode({
     "DJANGO_SECRET_KEY": random_password.django_secret_key.result
     "DJANGO_DB_PASSWORD": random_password.app_db_password.result
+    "EMAIL_HOST_PASSWORD": aws_iam_access_key.smtp_user.ses_smtp_password_v4
+    "DJANGO_SUPERUSER_PASSWORD": random_password.init_superuser_password.result
   })
 }
 
@@ -863,4 +935,12 @@ output static_bucket {
 
 output static_url {
   value = local.static_url
+}
+
+output rds_master_credentials_arn {
+  value = aws_secretsmanager_secret.rds_master_credentials.arn
+}
+
+output init_superuser_password {
+  value = random_password.init_superuser_password.result
 }

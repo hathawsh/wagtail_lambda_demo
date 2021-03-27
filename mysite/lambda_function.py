@@ -34,17 +34,24 @@ def install_secrets():
 
 
 def manage(event, context):
-    """Entry point for running a management command"""
-    install_secrets()
+    """Entry point for running a management command. Supported formats:
 
-    command = event['command']
-    args = event.get('args', ())
-    kwargs = event.get('kwargs', {})
+    - "migrate"
+    - ["migrate"]
+    - {"command": ["migrate"]}
+    """
+    if isinstance(event, dict):
+        command = event['command']
+    else:
+        command = event
+    if isinstance(command, str):
+        command = command.split()
+
     install_secrets()
     from django.core.wsgi import get_wsgi_application
     get_wsgi_application()  # Initialize Django
     from django.core import management
-    return management.call_command(command, *args, **kwargs)
+    return management.call_command(*command)
 
 
 _real_handler = None
