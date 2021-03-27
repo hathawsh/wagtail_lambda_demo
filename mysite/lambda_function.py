@@ -41,6 +41,8 @@ def manage(event, context):
     args = event.get('args', ())
     kwargs = event.get('kwargs', {})
     install_secrets()
+    from django.core.wsgi import get_wsgi_application
+    get_wsgi_application()  # Initialize Django
     from django.core import management
     return management.call_command(command, *args, **kwargs)
 
@@ -56,7 +58,8 @@ def lambda_handler(event, context):
         install_secrets()
 
         from apig_wsgi import make_lambda_handler
-        from mysite.wsgi import application
+        from django.core.wsgi import get_wsgi_application
+        application = get_wsgi_application()
         _real_handler = make_lambda_handler(application)
 
     return _real_handler(event, context)

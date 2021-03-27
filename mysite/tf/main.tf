@@ -266,6 +266,11 @@ resource "random_id" "bucket_id" {
   byte_length  = 8
 }
 
+
+
+
+
+
 resource "aws_s3_bucket" "code" {
   bucket = "${var.name_prefix}-${random_id.bucket_id.hex}-code"
   tags = {
@@ -314,9 +319,130 @@ resource "aws_s3_bucket_public_access_block" "media_not_public" {
 
 
 
+locals {
+  static_bucket = "${var.name_prefix}-${random_id.bucket_id.hex}-static"
+  static_url = "https://${aws_cloudfront_distribution.cf_static.domain_name}/"
+}
+
+resource "aws_s3_bucket" "static" {
+  bucket = local.static_bucket
+  acl = "public-read"
+
+  tags = {
+    Environment = var.environment_tag
+  }
+
+  website {
+    index_document = "index.html"
+  }
+
+  policy = <<POLICY
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PublicReadGetObject",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${local.static_bucket}/*"
+      ]
+    }
+  ]
+}
+POLICY
+}
+
+resource "aws_s3_bucket_public_access_block" "static_public" {
+  bucket = aws_s3_bucket.static.id
+
+  block_public_acls = false
+  block_public_policy = false
+  ignore_public_acls = false
+  restrict_public_buckets = false
+
+}
+
+
+
+
+resource aws_cloudfront_cache_policy static_cache_policy {
+  name = "${var.name_prefix}_cf_cache_policy"
+  min_ttl = 1
+  default_ttl = 30
+  max_ttl = 30
+
+  parameters_in_cache_key_and_forwarded_to_origin {
+    enable_accept_encoding_brotli = true
+    enable_accept_encoding_gzip   = true
+
+    cookies_config {
+      cookie_behavior = "none"
+    }
+
+    headers_config {
+      header_behavior = "none"
+    }
+
+    query_strings_config {
+      query_string_behavior = "none"
+    }
+  }
+}
+
+resource aws_cloudfront_distribution cf_static {
+  enabled = true
+  price_class = "PriceClass_100"
+  is_ipv6_enabled = true
+
+  origin {
+    origin_id = "S3-${local.static_bucket}"
+    domain_name = aws_s3_bucket.static.website_endpoint
+
+    custom_origin_config {
+      http_port = 80
+      https_port = 443
+      origin_keepalive_timeout = 5
+      origin_protocol_policy   = "http-only"
+      origin_read_timeout      = 30
+      origin_ssl_protocols = ["TLSv1", "TLSv1.1", "TLSv1.2"]
+    }
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  default_cache_behavior {
+    allowed_methods = ["GET", "HEAD"]
+    cached_methods = ["GET", "HEAD"]
+    target_origin_id = "S3-${local.static_bucket}"
+    cache_policy_id = aws_cloudfront_cache_policy.static_cache_policy.id
+    viewer_protocol_policy = "https-only"
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+
+  tags = {
+    Environment = var.environment_tag
+  }
+}
+
+
+
+
+
+
 
 locals {
-  lambda_variables = {
+  lambda_env_vars = {
     "ENV_SECRET_ID" = aws_secretsmanager_secret.env_secret.arn
     "DJANGO_SETTINGS_MODULE" = "mysite.settings.production"
     "DJANGO_DB_ENGINE" = "django.db.backends.postgresql_psycopg2"
@@ -325,6 +451,8 @@ locals {
     # DJANGO_DB_PASSWORD is in the secret
     "DJANGO_DB_HOST" = aws_rds_cluster.rds.endpoint
     "DJANGO_DB_PORT" = aws_rds_cluster.rds.port
+    "ALLOWED_HOSTS" = aws_apigatewayv2_api.apigw.api_endpoint
+    "STATIC_URL" = local.static_url
   }
 }
 
@@ -346,7 +474,7 @@ resource "aws_lambda_function" "wsgi" {
   runtime = "python3.8"
 
   environment {
-    variables = local.lambda_variables
+    variables = local.lambda_env_vars
   }
 
   tracing_config {
@@ -386,11 +514,11 @@ resource "aws_lambda_function" "manage" {
   s3_object_version = aws_s3_bucket_object.lambda_zip.version_id
   memory_size = "512"
   publish = false
-  timeout = "60"
+  timeout = "300"
   runtime = "python3.8"
 
   environment {
-    variables = local.lambda_variables
+    variables = local.lambda_env_vars
   }
 
   tracing_config {
@@ -412,6 +540,8 @@ resource "aws_lambda_function" "manage" {
 
 
 
+
+
 resource "aws_lambda_function" "hello" {
   function_name = "${var.name_prefix}_hello"
   role = aws_iam_role.lambda_role.arn
@@ -425,7 +555,7 @@ resource "aws_lambda_function" "hello" {
   runtime = "python3.8"
 
   environment {
-    variables = local.lambda_variables
+    variables = local.lambda_env_vars
   }
 
   tracing_config {
@@ -493,7 +623,7 @@ resource "aws_apigatewayv2_route" "route" {
 
 resource "aws_apigatewayv2_stage" "default" {
   api_id = aws_apigatewayv2_api.apigw.id
-  name = "${var.name_prefix}_apigw_stage"  # "$default" ?
+  name = "$default"
   auto_deploy = true
 
   access_log_settings {
@@ -505,8 +635,6 @@ resource "aws_apigatewayv2_stage" "default" {
     Environment = var.environment_tag
   }
 }
-
-
 
 
 
@@ -710,3 +838,20 @@ resource "aws_secretsmanager_secret_version" "rds_app_credentials" {
 #   secret_arn   = aws_secretsmanager_secret.rds_master_credentials.arn
 #   owner        = "appuser"
 # }
+
+
+
+
+
+
+output app_endpoint {
+  value = aws_apigatewayv2_api.apigw.api_endpoint
+}
+
+output static_bucket {
+  value = local.static_bucket
+}
+
+output static_url {
+  value = local.static_url
+}

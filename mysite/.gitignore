@@ -1,5 +1,6 @@
 db.sqlite3
-out
+/out
 *.pyc
 __pycache__
 *.egg-info
+/static

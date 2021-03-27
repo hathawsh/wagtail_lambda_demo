@@ -30,6 +30,7 @@ COPY blog blog
 COPY home home
 COPY search search
 COPY mysite mysite
+COPY static static
 
 # Remove artifacts that won't be used.
 # If lib64 is a symlink, remove it.
