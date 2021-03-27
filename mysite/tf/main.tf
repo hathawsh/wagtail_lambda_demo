@@ -321,12 +321,12 @@ resource "aws_s3_bucket_public_access_block" "media_not_public" {
 
 locals {
   static_bucket = "${var.name_prefix}-${random_id.bucket_id.hex}-static"
-  static_url = "https://${aws_cloudfront_distribution.cf_static.domain_name}/"
+  static_url = "https://${aws_cloudfront_distribution.cf_static.domain_name}/s/"
 }
 
 resource "aws_s3_bucket" "static" {
   bucket = local.static_bucket
-  acl = "public-read"
+  acl = "private"
 
   tags = {
     Environment = var.environment_tag
@@ -363,8 +363,17 @@ resource "aws_s3_bucket_public_access_block" "static_public" {
   block_public_policy = false
   ignore_public_acls = false
   restrict_public_buckets = false
-
 }
+
+resource "aws_s3_bucket_object" "static_index_html" {
+  bucket = aws_s3_bucket.static.bucket
+  key    = "index.html"
+  content = "<html><body><a href=\"${aws_apigatewayv2_api.apigw.api_endpoint}\">Home</a></body></html>"
+  content_type = "text/html"
+}
+
+
+
 
 
 
